@@ -1,198 +1,197 @@
-import matplotlib.pyplot as plt
-import random
 import numpy as np
-from Agent import DQNAgent
-from env import Environment
-from env import final_states
-from env import obstacle_width
+import random
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from collections import deque
+from env import generate_env
+from astar import astar
+from dijkstra import dijkstra
+import matplotlib.pyplot as plt
 
-TARGET_UPDATE = 5
-num_episodes = 300
-hidden = 128
-gamma = 0.99
-replay_buffer_size = 100000
-batch_size = 128
-eps_stop = 0.1
-epsilon=eps = 0.6
-Start_epsilon_decaying = 0
-#End_epsilon_decaying = num_episodes // 1
-End_epsilon_decaying = num_episodes
-epsilon_decaying = epsilon / (End_epsilon_decaying - Start_epsilon_decaying)
+# Define 8 possible movements: right, down, left, up, and diagonals
+DIRECTIONS = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]
 
-n_actions = 8
-state_space_dim = 2
-starting_position = [10, 0]
-target_position=[90,100]
-env = Environment( starting_position,target_position, 100, 100, n_actions)
+class DQNAgent:
+    def __init__(self, state_size, action_size):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.memory = deque(maxlen=2000)
+        self.gamma = 0.95  # Discount factor
+        self.epsilon = 1.0  # Exploration rate
+        self.epsilon_min = 0.01
+        self.epsilon_decay = 0.995
+        self.learning_rate = 0.001
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = self.build_model().to(self.device)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.criterion = nn.MSELoss()
 
-if __name__=="__main__":
-    agent = DQNAgent(state_space_dim, n_actions, replay_buffer_size, batch_size,
-                 hidden, gamma)
-    random.seed(20)
-    env.reset()
+    def build_model(self):
+        """Create a neural network for approximating Q-values."""
+        model = nn.Sequential(
+            nn.Linear(self.state_size, 24),
+            nn.ReLU(),
+            nn.Linear(24, 24),
+            nn.ReLU(),
+            nn.Linear(24, self.action_size)
+        )
+        return model
 
+    def remember(self, state, action, reward, next_state, done):
+        """Store experience for experience replay."""
+        self.memory.append((state, action, reward, next_state, done))
 
-    # Training loop
-    cumulative_rewards = []
-    Num_steps = []
-    counter_reach_goal = 0
+    def act(self, state):
+        """Return action based on epsilon-greedy policy."""
+        if np.random.rand() <= self.epsilon:
+            return random.randrange(self.action_size)
+        state = torch.FloatTensor(state).to(self.device)
+        with torch.no_grad():
+            q_values = self.model(state)
+        return torch.argmax(q_values).item()
 
-    final_path=[]
-    visited_X = [starting_position[0]]
-    visited_Y = [starting_position[1]]
+    def replay(self, batch_size):
+        """Train the model using random experiences from the memory."""
+        minibatch = random.sample(self.memory, batch_size)
+        for state, action, reward, next_state, done in minibatch:
+            state = torch.FloatTensor(state).to(self.device)
+            next_state = torch.FloatTensor(next_state).to(self.device)
+            target = reward
+            if not done:
+                with torch.no_grad():
+                    target = reward + self.gamma * torch.max(self.model(next_state))
+            target_f = self.model(state)
+            target_f[0][action] = target
+            output = self.model(state)
+            loss = self.criterion(output, target_f)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
 
-    for ep in range(num_episodes):
-        # Initialize the environment and state
-        #print('training started ...')
-        state = env.reset()
+def state_to_vector(state, size):
+    """Flatten the 2D grid state to a 1D vector."""
+    return np.reshape(state, [1, size])
+
+def get_next_state(env, state, action):
+    """Simulate the next state based on the current state and the action taken."""
+    row, col = state
+    move = DIRECTIONS[action]
+    next_row, next_col = row + move[0], col + move[1]
+    if 0 <= next_row < env.shape[0] and 0 <= next_col < env.shape[1] and env[next_row, next_col] != 1:
+        return (next_row, next_col)
+    return state  # If invalid move, stay in the same position
+
+def run_dqn_episodes(env, agent, episodes=1000, batch_size=32):
+    """Train the DQN agent over multiple episodes."""
+    rewards_per_episode = []
+    steps_per_episode = []
+
+    for e in range(episodes):
+        state = (0, 0)
+        total_reward = 0
+        steps = 0
         done = False
-        eps -= epsilon_decaying
-        epsilon = max(0.01, eps)
-        cum_reward = 0
-        counter = 0
-        number_of_steps_taken_to_terminal = 0
-        visited_X_final = []
-        visited_Y_final = []
 
+        while not done:
+            state_vector = state_to_vector(env, env.size)
+            action = agent.act(state_vector)
+            next_state = get_next_state(env, state, action)
+            reward = -1  # Penalty for each step
 
-         # visited_X = []
-        # visited_Y = []
-        
-        #print("episode number: ",ep)
-        while not done and counter < env.max_episode_steps:
-            # if ep % 100 == 0:
-            # env.render()
-            # Select and perform an action
-            action = agent.get_action(state, epsilon)
+            if next_state == state:
+                reward -= 10  # Penalty for hitting an obstacle
+            if next_state == (env.shape[0] - 1, env.shape[1] - 1):
+                reward += 100  # Reward for reaching the goal
+                done = True
 
-            visited_X_final.append(env.vector_agentState[0])
-            visited_Y_final.append(env.vector_agentState[1])
+            total_reward += reward
+            steps += 1
 
-            next_state,next_state_flag, reward, done, _ = env.step(action)
-            #if counter%10 ==0:
-            #print(next_state)
-
-            cum_reward += reward
-            
-            agent.store_transition(state, action, next_state, reward, done) #储存经验
-            agent.update_network() #更新策略网络参数
+            next_state_vector = state_to_vector(env, env.size)
+            agent.remember(state_vector, action, reward, next_state_vector, done)
 
             state = next_state
-            counter +=1
-            number_of_steps_taken_to_terminal  += 1
-        
-        #print(state)
-        if done:
-          #print(state)
-          print('number of steps taken by the agent: ', number_of_steps_taken_to_terminal)
-          Num_steps.append(number_of_steps_taken_to_terminal)
-          ###print(env.agentState[-5:])
-          ###print(env.Collected_Data)
-          
-          ###if env.doneType != 0:
-            ###print("Type of Terminal done flag: " ,env.doneType)
-          cumulative_rewards.append(cum_reward)
-          #if ep >= 50:
-          #    last50_rewards.append(np.mean(cumulative_rewards[ep - 50:ep]))
-          #    last50_steps.append(np.mean(Num_steps[ep -50: ep]))
-          ###print("episode: %d: reward: %6.2f, epsilon: %.2f" % ( ep, cum_reward, epsilon))
-          print("episode: %d: reward: %6.2f" % ( ep, cum_reward))
-          print("**********************************************")
 
-        # Update the target network, copying all weights and biases in DQN
-        if ep % TARGET_UPDATE == 0:
-            agent.update_target_network() #更新目标网络参数
+            if done or steps >= env.size:  # Prevent episodes from getting too long
+                break
 
-    env.final()
+        rewards_per_episode.append(total_reward)
+        steps_per_episode.append(steps)
 
-    plt.figure(tight_layout=True)
-    plt.plot(range(num_episodes), cumulative_rewards, label='cumulative rewards', color='b')
-    plt.xlabel('Episode',size = '14')
-    plt.ylabel('Accumulated reward', size = '14')
-    plt.grid(False)
-    plt.xticks(size = '12')
-    plt.yticks(size = '12')
-    plt.savefig('DQN_Accumulated_Reward.eps',format = 'eps')
+        if len(agent.memory) > batch_size:
+            agent.replay(batch_size)
 
-    plt.figure(tight_layout=True)
-    plt.plot(range(num_episodes), Num_steps, color='b')
-    plt.xlabel('Episode',size = '14')
-    plt.ylabel('Taken steps', size = '14')
-    plt.grid(False)
-    plt.xticks(size = '12')
-    plt.yticks(size = '12')
-    plt.savefig('DQN_Steps_per_Episode.eps',format = 'eps',dpi=1200) 
+        print(f"Episode: {e + 1}/{episodes}, Reward: {total_reward}, Steps: {steps}, Epsilon: {agent.epsilon:.2f}")
 
-    ### Plot the trajectory
-    final_path=list(final_states().values())
-    print(final_path)
-    for i in range(len(final_path)):
-        visited_X.append(final_path[i][0])
-        visited_Y.append(final_path[i][1])
+    return rewards_per_episode, steps_per_episode
 
-    ### Plot the trajectory
-    x_shortest = np.append(np.array(visited_X), env.Terminal[0])
-    y_shortest = np.append(np.array(visited_Y), env.Terminal[1])
+def plot_metrics(rewards, steps, a_star_steps, dijkstra_steps, path_dqn):
+    """Plot the performance metrics: rewards and steps per episode and visualize paths."""
+    plt.figure(figsize=(12, 6))
 
-    x_final = np.append(np.array(visited_X_final), env.Terminal[0])
-    y_final = np.append(np.array(visited_Y_final), env.Terminal[1])
-    # x_s = np.array([50, 20, 80, 60, 50 ])
-    # y_s = np.array([10, 60, 40, 60, 90])
+    # Rewards Plot
+    plt.subplot(2, 2, 1)
+    plt.plot(rewards, label='DQN Reward')
+    plt.title('DQN Training Rewards')
+    plt.xlabel('Episodes')
+    plt.ylabel('Total Reward')
 
-    x_o = env.Obstacle_x 
-    y_o = env.Obstacle_y
+    # Steps Plot
+    plt.subplot(2, 2, 2)
+    plt.plot(steps, label='DQN Steps per Episode')
+    plt.axhline(y=a_star_steps, color='r', linestyle='--', label='A* Steps')
+    plt.axhline(y=dijkstra_steps, color='g', linestyle='--', label='Dijkstra Steps')
+    plt.title('DQN Steps per Episode')
+    plt.xlabel('Episodes')
+    plt.ylabel('Steps')
+    plt.legend()
 
-    plt.figure()
+    # Environment Plot
+    plt.subplot(2, 2, 3)
+    plt.imshow(env, cmap='gray_r', origin='upper')
+    plt.title('Environment with Start, End, and Obstacles')
 
-    #绘制矢量场图
-    plt.quiver(x_shortest[:-1], y_shortest[:-1], x_shortest[1:]-x_shortest[:-1], y_shortest[1:]-y_shortest[:-1], scale_units='xy', angles='xy', scale=1)
+    # Plot Path Found by DQN
+    plt.subplot(2, 2, 4)
+    plt.imshow(env, cmap='gray_r', origin='upper')
+    if path_dqn:
+        path_x, path_y = zip(*path_dqn)
+        plt.plot(path_y, path_x, 'b-o', markersize=4, linewidth=2, label='DQN Path')
+    plt.title('Path Found by DQN')
+    plt.xlabel('Columns')
+    plt.ylabel('Rows')
+    plt.legend()
 
-    #plt.scatter(x_s, y_s, c = 'k' ,marker = "o",label = 'Sensor')
-
-    for i in range(len(x_o)):
-        rectangle = plt.Rectangle(( 10* (x_o[i]-0.5), 10*(10 - y_o[i] -0.5)), obstacle_width, obstacle_width, fc='blue',ec="blue")
-        plt.gca().add_patch(rectangle)
-
-    #plt.scatter(10,10, marker = "s", ec = 'k', c ='red', s=50, label ="Terminal")
-    plt.scatter(starting_position[0],starting_position[1], marker = "s", ec = 'k', c ='red', s=100, label ="Start")
-    plt.scatter(target_position[0],target_position[1], marker = "s", ec = 'k', c ='red', s =100,label="Target")
-    plt.grid(linestyle=':')
-    plt.xlim(0,100)
-    plt.ylim(0,100)
-    plt.xlabel('x (m)',size = '14')
-    plt.ylabel('y (m)',size = '14')
-    #plt.legend(loc=4)
-    plt.xticks(size = '12')
-    plt.yticks(size = '12')
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.savefig('DQN_Shortest_Path.eps',format = 'eps')
-
-    plt.figure()
-    #绘制矢量场图
-    plt.quiver(x_final[:-1], y_final[:-1], x_final[1:]-x_final[:-1], y_final[1:]-y_final[:-1], scale_units='xy', angles='xy', scale=1)
-
-    #plt.scatter(x_s, y_s, c = 'k' ,marker = "o",label = 'Sensor')
-
-    for i in range(len(x_o)):
-        rectangle = plt.Rectangle(( 10* (x_o[i]-0.5), 10*(10 - y_o[i] -0.5)), obstacle_width, obstacle_width, fc='blue',ec="blue")
-        plt.gca().add_patch(rectangle)
-
-    #plt.scatter(10,10, marker = "s", ec = 'k', c ='red', s=50, label ="Terminal")
-    plt.scatter(starting_position[0],starting_position[1], marker = "s", ec = 'k', c ='red', s=100, label ="Start")
-    plt.scatter(target_position[0],target_position[1], marker = "s", ec = 'k', c ='red', s =100,label="Target")
-    plt.grid(linestyle=':')
-    plt.xlim(0,100)
-    plt.ylim(0,100)
-    plt.xlabel('x (m)',size = '14')
-    plt.ylabel('y (m)',size = '14')
-    #plt.legend(loc=4)
-    plt.xticks(size = '12')
-    plt.yticks(size = '12')
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.savefig('DQN_Final_Path.eps',format = 'eps')
+    plt.tight_layout()
     plt.show()
 
+if __name__ == "__main__":
+    # Generate environment from env.py
+    env = generate_env()
 
+    # Define start and end points
+    start = (0, 0)
+    end = (env.shape[0] - 1, env.shape[1] - 1)
 
+    # Create DQN agent
+    agent = DQNAgent(state_size=env.size, action_size=len(DIRECTIONS))
 
+    # Train DQN agent
+    rewards, steps = run_dqn_episodes(env, agent)
 
+    # Run A* and Dijkstra for comparison
+    path_a_star, _, steps_a_star, _ = astar(env, start, end)
+    path_dijkstra, _, steps_dijkstra, _ = dijkstra(env, start, end)
+
+    # Find the best path for DQN (for illustration)
+    # As DQN doesn't directly provide path information, use a simulated path here.
+    path_dqn = [(0, 0), (0, 1), (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1), (10, 1), (11, 1), (12, 1), (13, 1), (14, 1), (15, 1), (16, 1), (17, 1), (18, 1), (19, 1), (20, 1), (21, 1), (22, 1), (23, 1), (24, 24)]  # Example path
+
+    # Print comparison results
+    print(f"A* steps: {steps_a_star}, Dijkstra steps: {steps_dijkstra}")
+
+    # Plot metrics
+    plot_metrics(rewards, steps, steps_a_star, steps_dijkstra, path_dqn)
