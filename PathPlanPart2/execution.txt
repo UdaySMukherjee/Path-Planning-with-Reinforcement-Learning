@@ -1,0 +1,5 @@
+A* Path Length: 49 steps, Execution Time: 0.0000 seconds
+Dijkstra Path Length: 49 steps, Execution Time: 19.6591 seconds
+DQN Path Length: 49 steps, Execution Time: 0.0000 seconds
+Q-learning Path Length: 49 steps, Execution Time: 0.0000 seconds
+SARSA Path Length: 49 steps, Execution Time: 0.0000 seconds
