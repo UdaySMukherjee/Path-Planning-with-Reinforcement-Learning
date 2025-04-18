@@ -15,7 +15,7 @@ OBSTACLE_SPEED = CELL_SIZE / 2
 final_route = {}
 
 class DynamicEnvironment:
-    def __init__(self, initial_position, target_position):
+    def _init_(self, initial_position, target_position):
         self.grid_size = GRID_SIZE
         self.cell_size = CELL_SIZE
         self.x_max_coord = X_MAX_COORD
@@ -106,16 +106,24 @@ class DynamicEnvironment:
 
     def is_collision(self, agent_pos_vector):
         agent_x, agent_y = agent_pos_vector
-        agent_radius = AGENT_SPEED / 2
+        box_size = AGENT_SPEED
+
+        corners = [
+            (agent_x, agent_y),
+            (agent_x + box_size, agent_y),
+            (agent_x, agent_y + box_size),
+            (agent_x + box_size, agent_y + box_size)
+        ]
+
         obs_radius = self.obstacle_width_coord / 2
 
-        for obs_x, obs_y in self.static_obstacles:
-            if (agent_x - obs_x)**2 + (agent_y - obs_y)**2 < (agent_radius + obs_radius)**2:
-                return True
-
-        for obs_x, obs_y, *_ in self.obstacles:
-            if (agent_x - obs_x)**2 + (agent_y - obs_y)**2 < (agent_radius + obs_radius)**2:
-                return True
+        for corner_x, corner_y in corners:
+            for obs_x, obs_y in self.static_obstacles:
+                if (corner_x - obs_x)*2 + (corner_y - obs_y)*2 < obs_radius*2:
+                    return True
+            for obs_x, obs_y, *_ in self.obstacles:
+                if (corner_x - obs_x)*2 + (corner_y - obs_y)*2 < obs_radius*2:
+                    return True
         return False
 
     def is_terminal_reached(self):
@@ -127,7 +135,13 @@ class DynamicEnvironment:
         elif reached:
             return 100, 'goal'
         else:
-            return -1, 'continue'
+            distance_to_goal = np.linalg.norm(self.vector_agent_state - self.vector_terminal_state)
+            distance_from_start = np.linalg.norm(self.vector_agent_state - self.vector_initial_state)
+            max_dist = np.linalg.norm([self.x_max_coord, self.y_max_coord])
+            progress_reward = 0.5 * (distance_from_start / max_dist)
+            goal_reward = 1.5 * (1 - distance_to_goal / max_dist)
+            reward = progress_reward + goal_reward
+            return reward, 'continue'
 
     def reset(self):
         self.vector_agent_state = np.copy(self.vector_initial_state)
@@ -213,7 +227,10 @@ class DynamicEnvironment:
         plt.scatter(sx, sy, color='green', s=150, label='Start', zorder=5)
         tx, ty = self.vector_terminal_state
         plt.scatter(tx, ty, color='red', s=150, label='Terminal', zorder=5)
-        ax.scatter(*self.vector_agent_state, color='blue', s=100, label='Agent', zorder=5)
+        # ax.scatter(*self.vector_agent_state, color='blue', s=100, label='Agent', zorder=5)
+        agent_x, agent_y = self.vector_agent_state
+        ax.add_patch(plt.Rectangle((agent_x - CELL_SIZE/2, agent_y - CELL_SIZE/2),CELL_SIZE, CELL_SIZE,color='blue', label='Agent', zorder=5))
+
 
         if self.final_path:
             x_vals = [pos[0] for pos in self.final_path.values()]
@@ -230,6 +247,39 @@ class DynamicEnvironment:
             plt.savefig(filename)
             print(f"Saved: {filename}")
         plt.show()
+
+    def simulate_obstacle_future(self, steps_ahead=2):
+        """Predict obstacle positions after n steps (no state change)."""
+        future_obstacles = [list(obs) for obs in self.obstacles]
+        simulated = []
+
+        for _ in range(steps_ahead):
+            temp = []
+            for i in range(len(future_obstacles)):
+                x, y, direction, motion_type = future_obstacles[i]
+                if motion_type == 'horizontal':
+                    x += direction * OBSTACLE_SPEED
+                    if x < 0 or x > self.x_max_coord:
+                        direction *= -1
+                        x = max(0, min(x, self.x_max_coord))
+
+                elif motion_type == 'vertical':
+                    y += direction * OBSTACLE_SPEED
+                    if y < 0 or y > self.y_max_coord:
+                        direction *= -1
+                        y = max(0, min(y, self.y_max_coord))
+
+                elif motion_type == 'random':
+                    x += random.choice([-1, 0, 1]) * OBSTACLE_SPEED
+                    y += random.choice([-1, 0, 1]) * OBSTACLE_SPEED
+                    x = max(0, min(x, self.x_max_coord))
+                    y = max(0, min(y, self.y_max_coord))
+
+                temp.append([x, y, direction, motion_type])
+            simulated.append(temp)
+            future_obstacles = temp
+
+        return simulated
 
 def final_states():
     return final_route
