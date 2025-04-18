@@ -7,9 +7,9 @@ import time
 import matplotlib.pyplot as plt
 from env import DynamicEnvironment, final_states
 
-# Q-Learning Agent
+#llearning Agent
 class QLearningAgent:
-    def __init__(self, state_size, action_size):
+    def _init_(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
         self.gamma = 0.95
@@ -31,13 +31,46 @@ class QLearningAgent:
             nn.Linear(24, self.action_size)
         )
 
-    def choose_action(self, state):
+    def choose_action(self, state, env):
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
+
+        # Predict obstacles t+1 and t+2
+        future_obs = env.simulate_obstacle_future(steps_ahead=2)
+        all_future_positions = {(int(x), int(y)) for step in future_obs for x, y, *_ in step}
+
+        # Determine safe actions
+        safe_actions = []
+        for action_id, move in env.action_space.items():
+            new_pos = np.array(env.vector_agent_state) + np.array(move, dtype=float)
+            new_pos[0] = np.clip(new_pos[0], 0, env.x_max_coord)
+            new_pos[1] = np.clip(new_pos[1], 0, env.y_max_coord)
+            # future_pos = (round(new_pos[0]), round(new_pos[1]))
+
+            # if future_pos not in all_future_positions:
+            #     safe_actions.append(action_id)
+            box_size = env.cell_size  # One unit = 1 cell size
+            corners = [
+                (round(new_pos[0]), round(new_pos[1])),
+                (round(new_pos[0] + box_size), round(new_pos[1])),
+                (round(new_pos[0]), round(new_pos[1] + box_size)),
+                (round(new_pos[0] + box_size), round(new_pos[1] + box_size)),
+            ]
+
+            # If all corners are safe, add action
+            if all(corner not in all_future_positions for corner in corners):
+                safe_actions.append(action_id)
+
+
+        if not safe_actions:
+            safe_actions = list(env.action_space.keys())
+
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
             q_values = self.model(state_tensor)
-        return torch.argmax(q_values).item()
+        q_values = q_values.cpu().numpy().squeeze()
+        best_action = max(safe_actions, key=lambda a: q_values[a])
+        return best_action
 
     def learn(self, state, action, reward, next_state):
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
@@ -54,9 +87,10 @@ class QLearningAgent:
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
+
 # SARSA Agent
 class SARSAAgent:
-    def __init__(self, state_size, action_size):
+    def _init_(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
         self.gamma = 0.95
@@ -78,13 +112,43 @@ class SARSAAgent:
             nn.Linear(24, self.action_size)
         )
 
-    def choose_action(self, state):
+    def choose_action(self, state, env):
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
+
+        future_obs = env.simulate_obstacle_future(steps_ahead=2)
+        all_future_positions = {(round(x), round(y)) for step in future_obs for x, y, *_ in step}
+
+        safe_actions = []
+        for action_id, move in env.action_space.items():
+            new_pos = np.array(env.vector_agent_state) + np.array(move, dtype=float)
+            new_pos[0] = np.clip(new_pos[0], 0, env.x_max_coord)
+            new_pos[1] = np.clip(new_pos[1], 0, env.y_max_coord)
+            # future_pos = (round(new_pos[0]), round(new_pos[1]))
+
+            # if future_pos not in all_future_positions:
+            #     safe_actions.append(action_id)
+            box_size = env.cell_size  # One unit = 1 cell size
+            corners = [
+                (round(new_pos[0]), round(new_pos[1])),
+                (round(new_pos[0] + box_size), round(new_pos[1])),
+                (round(new_pos[0]), round(new_pos[1] + box_size)),
+                (round(new_pos[0] + box_size), round(new_pos[1] + box_size)),
+            ]
+
+            # If all corners are safe, add action
+            if all(corner not in all_future_positions for corner in corners):
+                safe_actions.append(action_id)
+
+        if not safe_actions:
+            safe_actions = list(env.action_space.keys())
+
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
             q_values = self.model(state_tensor)
-        return torch.argmax(q_values).item()
+        q_values = q_values.cpu().numpy().squeeze()
+        return max(safe_actions, key=lambda a: q_values[a])
+
 
     def learn(self, state, action, reward, next_state, next_action):
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
@@ -103,7 +167,7 @@ class SARSAAgent:
 
 # DQN Agent
 class DQNAgent:
-    def __init__(self, state_size, action_size):
+    def _init_(self, state_size, action_size):
         self.state_size = state_size
         self.action_size = action_size
         self.gamma = 0.95
@@ -128,13 +192,43 @@ class DQNAgent:
         if len(self.memory) > 5000:
             self.memory.pop(0)
 
-    def choose_action(self, state):
+    def choose_action(self, state, env):
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
+
+        future_obs = env.simulate_obstacle_future(steps_ahead=2)
+        all_future_positions = {(round(x), round(y)) for step in future_obs for x, y, *_ in step}
+
+        safe_actions = []
+        for action_id, move in env.action_space.items():
+            new_pos = np.array(env.vector_agent_state) + np.array(move, dtype=float)
+            new_pos[0] = np.clip(new_pos[0], 0, env.x_max_coord)
+            new_pos[1] = np.clip(new_pos[1], 0, env.y_max_coord)
+            # future_pos = (round(new_pos[0]), round(new_pos[1]))
+
+            # if future_pos not in all_future_positions:
+            #     safe_actions.append(action_id)
+            box_size = env.cell_size  # One unit = 1 cell size
+            corners = [
+                (round(new_pos[0]), round(new_pos[1])),
+                (round(new_pos[0] + box_size), round(new_pos[1])),
+                (round(new_pos[0]), round(new_pos[1] + box_size)),
+                (round(new_pos[0] + box_size), round(new_pos[1] + box_size)),
+            ]
+
+            # If all corners are safe, add action
+            if all(corner not in all_future_positions for corner in corners):
+                safe_actions.append(action_id)
+
+        if not safe_actions:
+            safe_actions = list(env.action_space.keys())
+
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
             q_values = self.model(state_tensor)
-        return torch.argmax(q_values).item()
+        q_values = q_values.cpu().numpy().squeeze()
+        return max(safe_actions, key=lambda a: q_values[a])
+
 
     def replay(self, batch_size=64):
         if len(self.memory) < batch_size:
@@ -186,70 +280,79 @@ def compare_algorithms_plot(results_dict):
     plt.show()
 
 # Training Loops
-def run_qlearning_episodes(env, agent, episodes=100):
+def run_qlearning_episodes(env, agent, episodes=1000):
     rewards = []
     for ep in range(episodes):
+        start = time.time()
         state = env.reset()
         total_reward = 0
         done = False
         while not done:
-            action = agent.choose_action(state)
+            action = agent.choose_action(state, env)
             next_state, _, reward, done, _ = env.step(action)
             agent.learn(state, action, reward, next_state)
             state = next_state
             total_reward += reward
         rewards.append(total_reward)
+        print(f"Q-Learning Episode {ep+1} time: {time.time() - start:.2f} sec")
     return rewards
 
-def run_sarsa_episodes(env, agent, episodes=100):
+
+def run_sarsa_episodes(env, agent, episodes=1000):
     rewards = []
     for ep in range(episodes):
+        start = time.time()
         state = env.reset()
-        action = agent.choose_action(state)
+        action = agent.choose_action(state, env)
         total_reward = 0
         done = False
         while not done:
             next_state, _, reward, done, _ = env.step(action)
-            next_action = agent.choose_action(next_state)
+            next_action = agent.choose_action(next_state, env)
             agent.learn(state, action, reward, next_state, next_action)
             state, action = next_state, next_action
             total_reward += reward
         rewards.append(total_reward)
+        print(f"SARSA Episode {ep+1} time: {time.time() - start:.2f} sec")
     return rewards
 
-def run_dqn_episodes(env, agent, episodes=100):
+
+def run_dqn_episodes(env, agent, episodes=1000):
     rewards = []
     for ep in range(episodes):
+        start = time.time()
         state = env.reset()
         total_reward = 0
         done = False
         while not done:
-            action = agent.choose_action(state)
+            action = agent.choose_action(state, env)
             next_state, _, reward, done, _ = env.step(action)
             agent.remember(state, action, reward, next_state, done)
             agent.replay()
             state = next_state
             total_reward += reward
         rewards.append(total_reward)
+        print(f"DQN Episode {ep+1} time: {time.time() - start:.2f} sec")
     return rewards
 
+
 # Run Everything
-if __name__ == "__main__":
+if __name__ == "_main_":
     env1 = DynamicEnvironment([0.0, 0.0], [100, 100])
     q_agent = QLearningAgent(2, env1.num_actions)
-    rewards_q = run_qlearning_episodes(env1, q_agent, episodes=50)
+    rewards_q = run_qlearning_episodes(env1, q_agent, episodes=1000)
     print("\nQ-Learning Evaluation:")
     evaluate_agent(rewards_q)
 
     env2 = DynamicEnvironment([0.0, 0.0], [100, 100])
     s_agent = SARSAAgent(2, env2.num_actions)
-    rewards_s = run_sarsa_episodes(env2, s_agent, episodes=50)
+    rewards_s = run_sarsa_episodes(env2, s_agent, episodes=1000)
     print("\nSARSA Evaluation:")
     evaluate_agent(rewards_s)
 
     env3 = DynamicEnvironment([0.0, 0.0], [100, 100])
     dqn_agent = DQNAgent(2, env3.num_actions)
-    rewards_d = run_dqn_episodes(env3, dqn_agent, episodes=50)
+    rewards_d = run_dqn_episodes(env3, dqn_agent, episodes=1000)
     print("\nDQN Evaluation:")
     evaluate_agent(rewards_d)
 
